@@ -1,26 +1,66 @@
 """
 Resume Scanner & Job Finder
 ============================
-Complete working application that parses resumes and finds matching jobs.
+Complete working application with fixed PDF parsing
 """
 
 import streamlit as st
-import pdfminer.high_level
 import requests
 import spacy
 import re
+import os
+
+# ============================================
+# FIXED PDF PARSING - Multiple methods
+# ============================================
+
+def extract_text_from_pdf(pdf_file):
+    """Extract text from PDF using multiple fallback methods"""
+    text = ""
+    
+    # Method 1: Try pypdf (most reliable)
+    try:
+        from pypdf import PdfReader
+        pdf_reader = PdfReader(pdf_file)
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        if text.strip():
+            return text
+    except Exception as e:
+        pass
+    
+    # Method 2: Try pdfminer.six
+    try:
+        from pdfminer.high_level import extract_text
+        pdf_file.seek(0)  # Reset file pointer
+        text = extract_text(pdf_file)
+        if text.strip():
+            return text
+    except Exception as e:
+        pass
+    
+    # Method 3: Try pdfplumber
+    try:
+        import pdfplumber
+        pdf_file.seek(0)
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() + "\n"
+        if text.strip():
+            return text
+    except Exception as e:
+        pass
+    
+    return text
 
 # ============================================
 # CONFIGURATION
 # ============================================
 
-# Get free API keys from https://developer.adzuna.com/
-# Or leave as-is to use demo mode
 ADZUNA_APP_ID = "your_app_id_here"
 ADZUNA_API_KEY = "your_api_key_here"
 ADZUNA_COUNTRY = "us"
 
-# Comprehensive skills list
 TECHNICAL_SKILLS = [
     "python", "java", "javascript", "typescript", "c++", "c#", "ruby", "go", "golang",
     "rust", "swift", "kotlin", "php", "scala", "r", "matlab", "perl", "shell",
@@ -35,7 +75,9 @@ TECHNICAL_SKILLS = [
     "spark", "hadoop", "airflow", "nlp", "computer vision",
     "git", "jira", "confluence", "figma", "sketch", "postman", "swagger",
     "graphql", "rest api", "microservices", "agile", "scrum", "kanban",
-    "linux", "windows", "unix", "networking", "security", "ci/cd", "devops"
+    "linux", "windows", "unix", "networking", "security", "ci/cd", "devops",
+    "data analysis", "data scientist", "data engineer", "analytics", "big data",
+    "ios", "android", "mobile", "react native", "flutter", "graphql"
 ]
 
 # ============================================
@@ -56,14 +98,6 @@ nlp = load_nlp_model()
 # ============================================
 # RESUME PARSING FUNCTIONS
 # ============================================
-
-def extract_text_from_pdf(pdf_file):
-    try:
-        text = pdfminer.high_level.extract_text(pdf_file)
-        return text
-    except Exception as e:
-        st.error(f"Error extracting PDF: {e}")
-        return ""
 
 def extract_skills(text):
     text_lower = text.lower()
@@ -238,33 +272,26 @@ def main():
     st.markdown("Upload your resume and find matching job opportunities!")
     st.divider()
     
-    # Sidebar for settings
+    # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
         job_search = st.text_input("Job Title to Search", "software engineer")
         location = st.text_input("Location", "remote")
-        num_jobs = st.slider("Number of Jobs to Fetch", 5, 20, 10)
-        
-        st.markdown("---")
-        st.markdown("**📝 Note:** Without an Adzuna API key, demo jobs will be shown.")
-        st.markdown("[Get free API key](https://developer.adzuna.com/)")
+        num_jobs = st.slider("Number of Jobs", 5, 20, 10)
     
     # File upload
     uploaded_file = st.file_uploader("Upload your Resume (PDF)", type=["pdf"])
     
     if uploaded_file is not None:
         with st.spinner("Analyzing your resume..."):
-            # Extract text from PDF
             text = extract_text_from_pdf(uploaded_file)
             
-            if text:
-                # Analyze resume
+            if text and text.strip():
                 resume_data = analyze_resume(text)
                 
-                # Display analysis
                 st.success("✅ Resume uploaded successfully!")
                 
-                # Resume stats
+                # Stats
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Skills Found", len(resume_data["skills"]))
@@ -273,39 +300,31 @@ def main():
                 with col3:
                     st.metric("Detected Title", resume_data["job_title"])
                 with col4:
-                    if resume_data["email"]:
-                        st.metric("Email", "Found ✅")
-                    else:
-                        st.metric("Email", "Not found")
+                    st.metric("Email", "Found ✅" if resume_data["email"] else "Not found")
                 
-                # Show detected skills
-                st.subheader("🛠️ Detected Skills from Resume")
+                # Skills
+                st.subheader("🛠️ Detected Skills")
                 if resume_data["skills"]:
                     skills_html = " ".join([f"`{s}`" for s in resume_data["skills"]])
                     st.markdown(skills_html)
                 else:
-                    st.warning("No technical skills detected. Make sure your resume clearly lists your skills!")
+                    st.warning("No skills detected!")
                 
                 st.divider()
                 
-                # Fetch jobs
-                with st.spinner("Finding matching jobs..."):
+                # Jobs
+                with st.spinner("Finding jobs..."):
                     jobs = fetch_jobs_from_adzuna(job_search, location, num_jobs)
                     matched_jobs = match_jobs_with_resume(resume_data, jobs)
                 
-                # Display results
                 st.subheader(f"🎯 Top {len(matched_jobs)} Job Matches")
                 
                 for i, job in enumerate(matched_jobs, 1):
-                    # Color based on match score
                     if job["match_score"] >= 70:
-                        color = "🟢"
                         score_color = "green"
                     elif job["match_score"] >= 40:
-                        color = "🟡"
                         score_color = "orange"
                     else:
-                        color = "🔴"
                         score_color = "red"
                     
                     with st.container():
@@ -317,33 +336,16 @@ def main():
                             st.caption(f"🏢 {job['company']} | 📍 {job['location']}")
                             if job["salary"]:
                                 st.caption(f"💰 ${job['salary']:,}")
-                            st.caption(f"📝 {job['description'][:150]}...")
                         with cols[2]:
                             st.markdown(f":{score_color}[**{job['match_score']}%**]")
                             if job["url"] != "#":
                                 st.link_button("Apply", job["url"])
                         st.divider()
-                
-                # Show matched/missing skills for top 3
-                st.subheader("📊 Skills Breakdown (Top 3)")
-                for job in matched_jobs[:3]:
-                    with st.expander(f"{job['title']} - {job['match_score']}% Match"):
-                        if job["matched_skills"]:
-                            st.write("✅ **Matched Skills:** " + ", ".join(job["matched_skills"]))
-                        if job["missing_skills"]:
-                            st.write("💡 **Skills to Add:** " + ", ".join(job["missing_skills"]))
             else:
-                st.error("Could not extract text from PDF. Please try a different file.")
+                st.error("Could not read PDF. Please try another file.")
     
     else:
-        # Show sample when no file uploaded
-        st.info("👆 Please upload a PDF resume to get started!")
-        
-        st.subheader("📋 How it works:")
-        st.write("1. Upload your resume (PDF format)")
-        st.write("2. We'll extract your skills and experience")
-        st.write("3. We'll match you with relevant job opportunities")
-        st.write("4. You'll see your match percentage for each job")
+        st.info("👆 Upload a PDF resume to get started!")
 
 if __name__ == "__main__":
     main()
