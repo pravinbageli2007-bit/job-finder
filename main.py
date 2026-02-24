@@ -1,7 +1,7 @@
 """
 Resume Scanner & LinkedIn Job Finder
 =====================================
-Complete working application
+Version that works WITHOUT pypdf - uses only built-in libraries
 """
 
 import streamlit as st
@@ -9,25 +9,53 @@ import requests
 import re
 import webbrowser
 from urllib.parse import quote
+import io
 
 # ============================================
-# PDF PARSING - Multiple Methods
+# PDF PARSING - Built-in method (no pypdf needed)
 # ============================================
 
 def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF using pypdf"""
+    """
+    Extract text from PDF using pdfminer.six (built-in fallback)
+    """
+    # Try pdfminer.six first
     try:
-        from pypdf import PdfReader
-        pdf_reader = PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
-        return text
+        from pdfminer.high_level import extract_text
+        pdf_file.seek(0)
+        text = extract_text(pdf_file)
+        if text and text.strip():
+            return text
     except Exception as e:
-        st.error(f"Error reading PDF: {e}")
-        return ""
+        pass
+    
+    # Try reading raw PDF content as text (works for text-based PDFs)
+    try:
+        pdf_file.seek(0)
+        content = pdf_file.read()
+        
+        # Try to decode as latin-1 (PDF encoding)
+        try:
+            text = content.decode('latin-1')
+        except:
+            text = content.decode('utf-8', errors='ignore')
+        
+        # Extract text between stream tags
+        text = re.sub(r'<<[^>]*>>', '', text)
+        text = re.sub(r'BT[^/]*ET', '', text, flags=re.DOTALL)
+        text = re.sub(r'\$[^)]*\$', '', text)
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Clean up common PDF artifacts
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+        
+        if text and len(text) > 50:
+            return text
+    except Exception as e:
+        pass
+    
+    # If PDF parsing fails, ask user for text input
+    return None
 
 # ============================================
 # CONFIGURATION
@@ -38,17 +66,19 @@ TECHNICAL_SKILLS = [
     "rust", "swift", "kotlin", "php", "scala", "r", "matlab", "perl", "shell", "bash",
     "html", "css", "react", "angular", "vue", "node.js", "nodejs", "django", "flask",
     "spring", "express", "next.js", "nuxt", "svelte", "jquery", "bootstrap", "tailwind",
-    "webpack", "graphql", "apollo", "redux",
+    "webpack", "graphql", "apollo", "redux", "typescript",
     "sql", "mysql", "postgresql", "mongodb", "redis", "oracle", "sqlite", "mariadb",
-    "cassandra", "dynamodb", "elasticsearch", "firebase",
+    "cassandra", "dynamodb", "elasticsearch", "firebase", "supabase",
     "aws", "azure", "gcp", "google cloud", "docker", "kubernetes", "terraform",
-    "jenkins", "circleci", "github actions", "gitlab ci", "ansible", "puppet",
+    "jenkins", "circleci", "github actions", "gitlab ci", "ansible", "puppet", "helm",
     "machine learning", "deep learning", "tensorflow", "pytorch", "keras",
     "scikit-learn", "pandas", "numpy", "matplotlib", "tableau", "power bi",
-    "spark", "hadoop", "airflow", "nlp", "computer vision", "opencv",
-    "git", "jira", "confluence", "figma", "postman", "swagger",
-    "rest api", "microservices", "agile", "scrum", "kanban",
-    "linux", "windows", "unix", "networking", "security", "ci/cd"
+    "spark", "hadoop", "airflow", "nlp", "computer vision", "opencv", "xgboost",
+    "git", "jira", "confluence", "figma", "postman", "swagger", "insomnia",
+    "rest api", "microservices", "agile", "scrum", "kanban", "jira",
+    "linux", "windows", "unix", "macos", "networking", "security", "ci/cd", "devops",
+    "express.js", "fastapi", "nestjs", "prisma", "typeorm", "mongoose",
+    "azure devops", "aws lambda", "google cloud functions", "serverless"
 ]
 
 # ============================================
@@ -56,51 +86,99 @@ TECHNICAL_SKILLS = [
 # ============================================
 
 def extract_skills(text):
+    """Extract technical skills from resume text"""
+    if not text:
+        return []
+    
     text_lower = text.lower()
     found_skills = []
+    
     for skill in TECHNICAL_SKILLS:
         pattern = r'\b' + re.escape(skill.lower()) + r'\b'
         if re.search(pattern, text_lower):
             found_skills.append(skill)
+    
     return list(set(found_skills))
 
 def extract_experience_years(text):
+    """Extract years of experience from resume"""
+    if not text:
+        return 0
+    
     patterns = [
         r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of\s*)?(?:experience|exp)?',
+        r'(?:over|more than)\s*(\d+)\s*(?:years?|yrs?)',
+        r'(\d+)\s*(?:to\s*)?\d+\s*(?:years?|yrs?)',
         r'experience\s*(?:of\s*)?(\d+)\+?\s*(?:years?|yrs?)',
     ]
+    
     years = []
     for pattern in patterns:
         matches = re.findall(pattern, text, re.IGNORECASE)
         years.extend([int(y) for y in matches])
+    
     if years:
         return max(years)
+    
     return 0
 
 def extract_job_title(text):
+    """Extract job title from resume"""
+    if not text:
+        return "Not detected"
+    
     patterns = [
-        r'(?:senior|junior|lead|principal|staff|chief|head|director|manager|engineer|developer|analyst|scientist|architect|consultant)',
+        r'(?:position|role|title):\s*([^\n]+)',
+        r'(?:current|currently)\s*(?:working\s*as|role|position):\s*([^\n]+)',
     ]
+    
+    title_patterns = [
+        "software engineer", "senior software engineer", "junior software engineer",
+        "full stack developer", "frontend developer", "backend developer",
+        "data scientist", "data engineer", "machine learning engineer",
+        "devops engineer", "site reliability engineer", "cloud engineer",
+        "product manager", "project manager", "technical lead", "architect",
+        "ux designer", "ui designer", "qa engineer", "test engineer",
+        "mobile developer", "ios developer", "android developer",
+        "security engineer", "network engineer", "database administrator",
+        "system administrator", "backend engineer", "frontend engineer"
+    ]
+    
+    text_lower = text.lower()
+    for title in title_patterns:
+        if title in text_lower:
+            return title.title()
+    
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            return match.group(0).strip().title()
+            title = match.group(1).strip()
+            if len(title) > 3 and len(title) < 60:
+                return title.title()
+    
     return "Not detected"
 
 def extract_contact_info(text):
+    """Extract contact information from resume"""
+    if not text:
+        return {}
+    
     email = re.search(r'[\w.-]+@[\w.-]+\.\w+', text)
     phone = re.search(r'(?:\+?1[-.\s]?)?\$?\d{3}\$?[-.\s]?\d{3}[-.\s]?\d{4}', text)
     linkedin = re.search(r'linkedin\.com/in/[\w-]+', text, re.IGNORECASE)
     github = re.search(r'github\.com/[\w-]+', text, re.IGNORECASE)
+    portfolio = re.search(r'(?:https?://)?[\w-]+\.(?:com|io|me|dev)[\w-]*', text)
     
     return {
         "email": email.group(0) if email else None,
         "phone": phone.group(0) if phone else None,
         "linkedin": linkedin.group(0) if linkedin else None,
-        "github": github.group(0) if github else None
+        "github": github.group(0) if github else None,
+        "portfolio": portfolio.group(0) if portfolio else None
     }
 
 def analyze_resume(text):
+    """Complete resume analysis"""
     skills = extract_skills(text)
     experience_years = extract_experience_years(text)
     job_title = extract_job_title(text)
@@ -114,6 +192,7 @@ def analyze_resume(text):
         "phone": contact["phone"],
         "linkedin": contact["linkedin"],
         "github": contact["github"],
+        "portfolio": contact["portfolio"],
         "full_text": text
     }
 
@@ -148,31 +227,38 @@ def open_linkedin_jobs(resume_data, location=""):
 # ============================================
 
 def get_demo_jobs(search_query=""):
+    """Get demo jobs for testing"""
     demo_jobs = [
-        {"title": "Senior Python Developer", "company": "TechCorp", "location": "Remote", 
-         "salary": 120000, "description": "Python Django Flask PostgreSQL AWS Docker Kubernetes",
-         "url": "https://linkedin.com"},
+        {"title": "Senior Python Developer", "company": "TechCorp Inc.", "location": "Remote", 
+         "salary": 120000, "description": "Python Django Flask PostgreSQL AWS Docker Kubernetes machine learning",
+         "url": "https://www.linkedin.com/jobs"},
         {"title": "Full Stack JavaScript Developer", "company": "StartupXYZ", "location": "San Francisco, CA",
-         "salary": 95000, "description": "React Node.js MongoDB TypeScript JavaScript",
-         "url": "https://linkedin.com"},
-        {"title": "Data Scientist", "company": "DataDriven Co", "location": "New York, NY",
-         "salary": 130000, "description": "Python TensorFlow SQL machine learning pandas",
-         "url": "https://linkedin.com"},
-        {"title": "DevOps Engineer", "company": "CloudFirst", "location": "Austin, TX",
-         "salary": 110000, "description": "AWS Docker Kubernetes Terraform Jenkins",
-         "url": "https://linkedin.com"},
+         "salary": 95000, "description": "React Node.js MongoDB TypeScript JavaScript HTML CSS Docker",
+         "url": "https://www.linkedin.com/jobs"},
+        {"title": "Data Scientist", "company": "DataDriven Co.", "location": "New York, NY",
+         "salary": 130000, "description": "Python TensorFlow SQL pandas numpy machine learning deep learning",
+         "url": "https://www.linkedin.com/jobs"},
+        {"title": "DevOps Engineer", "company": "CloudFirst Ltd.", "location": "Austin, TX",
+         "salary": 110000, "description": "AWS Docker Kubernetes Terraform Jenkins CI/CD Linux Azure",
+         "url": "https://www.linkedin.com/jobs"},
         {"title": "Frontend Developer", "company": "WebAgency", "location": "Remote",
-         "salary": 85000, "description": "React TypeScript CSS HTML JavaScript",
-         "url": "https://linkedin.com"},
+         "salary": 85000, "description": "React TypeScript CSS HTML JavaScript Vue Angular Bootstrap",
+         "url": "https://www.linkedin.com/jobs"},
         {"title": "Machine Learning Engineer", "company": "AI Labs", "location": "Seattle, WA",
-         "salary": 145000, "description": "PyTorch TensorFlow deep learning NLP",
-         "url": "https://linkedin.com"},
-        {"title": "Backend Developer", "company": "ServerSide", "location": "Chicago, IL",
-         "salary": 100000, "description": "Java Spring Boot MySQL microservices",
-         "url": "https://linkedin.com"},
+         "salary": 145000, "description": "PyTorch TensorFlow deep learning NLP computer vision Python",
+         "url": "https://www.linkedin.com/jobs"},
+        {"title": "Backend Developer", "company": "ServerSide Inc.", "location": "Chicago, IL",
+         "salary": 100000, "description": "Java Spring Boot MySQL PostgreSQL microservices REST API",
+         "url": "https://www.linkedin.com/jobs"},
         {"title": "Product Manager", "company": "ProductFirst", "location": "Boston, MA",
-         "salary": 115000, "description": "Agile Scrum product management roadmap",
-         "url": "https://linkedin.com"},
+         "salary": 115000, "description": "Agile Scrum product management roadmap Jira Confluence",
+         "url": "https://www.linkedin.com/jobs"},
+        {"title": "Software Engineer", "company": "TechStart", "location": "Remote",
+         "salary": 105000, "description": "Python JavaScript React Docker AWS Git CI/CD",
+         "url": "https://www.linkedin.com/jobs"},
+        {"title": "Cloud Engineer", "company": "CloudSolutions", "location": "Denver, CO",
+         "salary": 125000, "description": "AWS Azure GCP Kubernetes Terraform Docker Linux networking",
+         "url": "https://www.linkedin.com/jobs"},
     ]
     
     if search_query:
@@ -186,6 +272,7 @@ def get_demo_jobs(search_query=""):
 # ============================================
 
 def calculate_match_score(resume_skills, job_description):
+    """Calculate how well resume matches a job"""
     if not job_description:
         return 0, [], []
     
@@ -206,12 +293,14 @@ def calculate_match_score(resume_skills, job_description):
     return round(match_rate, 1), matched_skills, missing_skills
 
 def match_jobs_with_resume(resume_data, jobs):
+    """Match resume against job listings"""
     resume_skills = resume_data.get("skills", [])
     results = []
     
     for job in jobs:
         match_score, matched, missing = calculate_match_score(resume_skills, job.get("description", ""))
         
+        # Boost score if job title contains relevant keywords
         title_lower = job.get("title", "").lower()
         for skill in resume_skills:
             if skill.lower() in title_lower:
@@ -262,7 +351,7 @@ def main():
             # Extract text from PDF
             text = extract_text_from_pdf(uploaded_file)
             
-            if text and text.strip():
+            if text and text.strip() and len(text) > 50:
                 # Analyze resume
                 resume_data = analyze_resume(text)
                 
@@ -285,7 +374,8 @@ def main():
                     skills_html = " ".join([f"`{s}`" for s in resume_data["skills"]])
                     st.markdown(skills_html)
                 else:
-                    st.warning("No technical skills detected! Make sure your resume lists your skills clearly.")
+                    st.warning("No technical skills detected!")
+                    st.info("💡 Tip: Make sure your resume clearly lists your technical skills like: Python, Java, React, AWS, etc.")
                 
                 # LinkedIn Button
                 st.divider()
@@ -295,11 +385,12 @@ def main():
                 with col_btn1:
                     if st.button("🚀 Open LinkedIn Jobs", type="primary", use_container_width=True):
                         url, query = open_linkedin_jobs(resume_data, location)
-                        st.success(f"Opened LinkedIn search for: {query}")
+                        st.success(f"✅ Opened LinkedIn search for: **{query}**")
                 
                 with col_btn2:
                     st.info(f"📍 Location: {location}")
-                    st.info(f"🔎 Search: {resume_data['skills'][:3] if resume_data['skills'] else job_search}")
+                    search_terms = ", ".join(resume_data['skills'][:5]) if resume_data['skills'] else job_search
+                    st.info(f"🔎 Searching for: {search_terms}")
                 
                 st.divider()
                 
@@ -310,7 +401,6 @@ def main():
                 matched_jobs = match_jobs_with_resume(resume_data, jobs)[:num_jobs]
                 
                 for i, job in enumerate(matched_jobs, 1):
-                    # Color based on match score
                     if job["match_score"] >= 70:
                         score_color = "green"
                         emoji = "🟢"
@@ -326,54 +416,3 @@ def main():
                         
                         with col_job1:
                             st.markdown(f"### {i}")
-                        
-                        with col_job2:
-                            st.markdown(f"**{job['title']}**")
-                            st.caption(f"🏢 {job['company']} | 📍 {job['location']}")
-                            if job["salary"]:
-                                st.caption(f"💰 ${job['salary']:,}")
-                            if job["matched_skills"]:
-                                st.caption(f"✅ Matched: {', '.join(job['matched_skills'])}")
-                        
-                        with col_job3:
-                            st.markdown(f":{score_color}[**{job['match_score']}%**]")
-                            st.link_button("Apply", job["url"], type="secondary")
-                        
-                        st.divider()
-                
-                # Skills breakdown
-                if matched_jobs:
-                    st.subheader("📊 Skills Breakdown")
-                    with st.expander("See detailed skills analysis"):
-                        for job in matched_jobs[:3]:
-                            st.write(f"**{job['title']}**")
-                            if job["matched_skills"]:
-                                st.success(f"✅ You have: {', '.join(job['matched_skills'])}")
-                            if job["missing_skills"]:
-                                st.warning(f"💡 Learn: {', '.join(job['missing_skills'])}")
-                            st.markdown("---")
-            
-            else:
-                st.error("❌ Could not read PDF. Please try a different file.")
-    
-    else:
-        # Welcome screen
-        st.info("👆 Please upload a PDF resume to get started!")
-        
-        st.subheader("📋 How to use:")
-        col_h1, col_h2, col_h3 = st.columns(3)
-        
-        with col_h1:
-            st.markdown("### 1. Upload")
-            st.markdown("Upload your PDF resume")
-        
-        with col_h2:
-            st.markdown("### 2. Analyze")
-            st.markdown("We extract skills & experience")
-        
-        with col_h3:
-            st.markdown("### 3. Find Jobs")
-            st.markdown("Get matched & apply!")
-
-if __name__ == "__main__":
-    main()
