@@ -1,57 +1,31 @@
 """
 Resume Scanner & Job Finder
 ============================
-Complete working application with fixed PDF parsing
+Complete working application
 """
 
 import streamlit as st
 import requests
-import spacy
 import re
-import os
 
 # ============================================
-# FIXED PDF PARSING - Multiple methods
+# PDF PARSING (No external dependencies)
 # ============================================
 
 def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF using multiple fallback methods"""
-    text = ""
-    
-    # Method 1: Try pypdf (most reliable)
+    """Extract text from PDF using pypdf"""
     try:
         from pypdf import PdfReader
         pdf_reader = PdfReader(pdf_file)
+        text = ""
         for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        if text.strip():
-            return text
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
+        return text
     except Exception as e:
-        pass
-    
-    # Method 2: Try pdfminer.six
-    try:
-        from pdfminer.high_level import extract_text
-        pdf_file.seek(0)  # Reset file pointer
-        text = extract_text(pdf_file)
-        if text.strip():
-            return text
-    except Exception as e:
-        pass
-    
-    # Method 3: Try pdfplumber
-    try:
-        import pdfplumber
-        pdf_file.seek(0)
-        with pdfplumber.open(pdf_file) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() + "\n"
-        if text.strip():
-            return text
-    except Exception as e:
-        pass
-    
-    return text
+        st.error(f"Error reading PDF: {e}")
+        return ""
 
 # ============================================
 # CONFIGURATION
@@ -68,32 +42,15 @@ TECHNICAL_SKILLS = [
     "spring", "express", "next.js", "nuxt", "svelte", "jquery", "bootstrap", "tailwind",
     "sql", "mysql", "postgresql", "mongodb", "redis", "oracle", "sqlite", "mariadb",
     "cassandra", "dynamodb", "elasticsearch", "firebase",
-    "aws", "azure", "gcp", "google cloud", "docker", "kubernetes", "terraform",
+    "aws", "azure", "gcp", "docker", "kubernetes", "terraform",
     "jenkins", "circleci", "github actions", "gitlab ci", "ansible", "puppet",
     "machine learning", "deep learning", "tensorflow", "pytorch", "keras",
     "scikit-learn", "pandas", "numpy", "matplotlib", "tableau", "power bi",
     "spark", "hadoop", "airflow", "nlp", "computer vision",
     "git", "jira", "confluence", "figma", "sketch", "postman", "swagger",
     "graphql", "rest api", "microservices", "agile", "scrum", "kanban",
-    "linux", "windows", "unix", "networking", "security", "ci/cd", "devops",
-    "data analysis", "data scientist", "data engineer", "analytics", "big data",
-    "ios", "android", "mobile", "react native", "flutter", "graphql"
+    "linux", "windows", "unix", "networking", "security", "ci/cd", "devops"
 ]
-
-# ============================================
-# LOAD NLP MODEL
-# ============================================
-
-@st.cache_resource
-def load_nlp_model():
-    try:
-        return spacy.load("en_core_web_sm")
-    except OSError:
-        import subprocess
-        subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
-        return spacy.load("en_core_web_sm")
-
-nlp = load_nlp_model()
 
 # ============================================
 # RESUME PARSING FUNCTIONS
@@ -122,10 +79,14 @@ def extract_experience_years(text):
     return 0
 
 def extract_job_title(text):
-    doc = nlp(text)
-    for ent in doc.ents:
-        if ent.label_ in ["ORG", "TITLE"]:
-            return ent.text
+    # Simple pattern matching for job titles
+    title_patterns = [
+        r'(?:senior|junior|lead|principal|staff|chief|head|director|manager|engineer|developer|analyst|scientist|architect|consultant|coordinator|administrator|specialist)\s*(?:engineer|developer|manager|analyst|scientist|architect|consultant)?',
+    ]
+    for pattern in title_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(0).strip().title()
     return "Not detected"
 
 def analyze_resume(text):
@@ -274,7 +235,7 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.header("⚙️ Settings")
+        st.header("Settings")
         job_search = st.text_input("Job Title to Search", "software engineer")
         location = st.text_input("Location", "remote")
         num_jobs = st.slider("Number of Jobs", 5, 20, 10)
@@ -289,7 +250,7 @@ def main():
             if text and text.strip():
                 resume_data = analyze_resume(text)
                 
-                st.success("✅ Resume uploaded successfully!")
+                st.success("Resume uploaded successfully!")
                 
                 # Stats
                 col1, col2, col3, col4 = st.columns(4)
@@ -300,10 +261,10 @@ def main():
                 with col3:
                     st.metric("Detected Title", resume_data["job_title"])
                 with col4:
-                    st.metric("Email", "Found ✅" if resume_data["email"] else "Not found")
+                    st.metric("Email", "Found" if resume_data["email"] else "Not found")
                 
                 # Skills
-                st.subheader("🛠️ Detected Skills")
+                st.subheader("Detected Skills")
                 if resume_data["skills"]:
                     skills_html = " ".join([f"`{s}`" for s in resume_data["skills"]])
                     st.markdown(skills_html)
@@ -317,7 +278,7 @@ def main():
                     jobs = fetch_jobs_from_adzuna(job_search, location, num_jobs)
                     matched_jobs = match_jobs_with_resume(resume_data, jobs)
                 
-                st.subheader(f"🎯 Top {len(matched_jobs)} Job Matches")
+                st.subheader(f"Top {len(matched_jobs)} Job Matches")
                 
                 for i, job in enumerate(matched_jobs, 1):
                     if job["match_score"] >= 70:
@@ -330,22 +291,20 @@ def main():
                     with st.container():
                         cols = st.columns([1, 5, 1])
                         with cols[0]:
-                            st.markdown(f"### {i}")
+                            st.markdown(f"**{i}**")
                         with cols[1]:
                             st.markdown(f"**{job['title']}**")
-                            st.caption(f"🏢 {job['company']} | 📍 {job['location']}")
+                            st.caption(f"{job['company']} | {job['location']}")
                             if job["salary"]:
-                                st.caption(f"💰 ${job['salary']:,}")
+                                st.caption(f"${job['salary']:,}")
                         with cols[2]:
                             st.markdown(f":{score_color}[**{job['match_score']}%**]")
-                            if job["url"] != "#":
-                                st.link_button("Apply", job["url"])
                         st.divider()
             else:
                 st.error("Could not read PDF. Please try another file.")
     
     else:
-        st.info("👆 Upload a PDF resume to get started!")
+        st.info("Upload a PDF resume to get started!")
 
 if __name__ == "__main__":
     main()
