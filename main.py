@@ -1,12 +1,33 @@
 """
-Simple Resume Scanner & Job Finder
-===================================
+Resume Scanner & LinkedIn Job Finder
+=====================================
+Complete working application
 """
 
 import streamlit as st
+import requests
 import re
 import webbrowser
 from urllib.parse import quote
+
+# ============================================
+# PDF PARSING - Multiple Methods
+# ============================================
+
+def extract_text_from_pdf(pdf_file):
+    """Extract text from PDF using pypdf"""
+    try:
+        from pypdf import PdfReader
+        pdf_reader = PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
+        return text
+    except Exception as e:
+        st.error(f"Error reading PDF: {e}")
+        return ""
 
 # ============================================
 # CONFIGURATION
@@ -17,17 +38,17 @@ TECHNICAL_SKILLS = [
     "rust", "swift", "kotlin", "php", "scala", "r", "matlab", "perl", "shell", "bash",
     "html", "css", "react", "angular", "vue", "node.js", "nodejs", "django", "flask",
     "spring", "express", "next.js", "nuxt", "svelte", "jquery", "bootstrap", "tailwind",
-    "graphql", "redux", "typescript",
+    "webpack", "graphql", "apollo", "redux",
     "sql", "mysql", "postgresql", "mongodb", "redis", "oracle", "sqlite", "mariadb",
     "cassandra", "dynamodb", "elasticsearch", "firebase",
-    "aws", "azure", "gcp", "docker", "kubernetes", "terraform",
-    "jenkins", "circleci", "github", "gitlab", "ansible", "puppet",
+    "aws", "azure", "gcp", "google cloud", "docker", "kubernetes", "terraform",
+    "jenkins", "circleci", "github actions", "gitlab ci", "ansible", "puppet",
     "machine learning", "deep learning", "tensorflow", "pytorch", "keras",
-    "pandas", "numpy", "matplotlib", "tableau", "power bi",
-    "spark", "hadoop", "airflow", "nlp", "computer vision",
+    "scikit-learn", "pandas", "numpy", "matplotlib", "tableau", "power bi",
+    "spark", "hadoop", "airflow", "nlp", "computer vision", "opencv",
     "git", "jira", "confluence", "figma", "postman", "swagger",
     "rest api", "microservices", "agile", "scrum", "kanban",
-    "linux", "windows", "unix", "networking", "security", "ci/cd", "devops"
+    "linux", "windows", "unix", "networking", "security", "ci/cd"
 ]
 
 # ============================================
@@ -46,6 +67,7 @@ def extract_skills(text):
 def extract_experience_years(text):
     patterns = [
         r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of\s*)?(?:experience|exp)?',
+        r'experience\s*(?:of\s*)?(\d+)\+?\s*(?:years?|yrs?)',
     ]
     years = []
     for pattern in patterns:
@@ -55,19 +77,43 @@ def extract_experience_years(text):
         return max(years)
     return 0
 
-def extract_email(text):
+def extract_job_title(text):
+    patterns = [
+        r'(?:senior|junior|lead|principal|staff|chief|head|director|manager|engineer|developer|analyst|scientist|architect|consultant)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(0).strip().title()
+    return "Not detected"
+
+def extract_contact_info(text):
     email = re.search(r'[\w.-]+@[\w.-]+\.\w+', text)
-    return email.group(0) if email else None
+    phone = re.search(r'(?:\+?1[-.\s]?)?\$?\d{3}\$?[-.\s]?\d{3}[-.\s]?\d{4}', text)
+    linkedin = re.search(r'linkedin\.com/in/[\w-]+', text, re.IGNORECASE)
+    github = re.search(r'github\.com/[\w-]+', text, re.IGNORECASE)
+    
+    return {
+        "email": email.group(0) if email else None,
+        "phone": phone.group(0) if phone else None,
+        "linkedin": linkedin.group(0) if linkedin else None,
+        "github": github.group(0) if github else None
+    }
 
 def analyze_resume(text):
     skills = extract_skills(text)
     experience_years = extract_experience_years(text)
-    email = extract_email(text)
+    job_title = extract_job_title(text)
+    contact = extract_contact_info(text)
     
     return {
         "skills": skills,
         "experience_years": experience_years,
-        "email": email,
+        "job_title": job_title,
+        "email": contact["email"],
+        "phone": contact["phone"],
+        "linkedin": contact["linkedin"],
+        "github": contact["github"],
         "full_text": text
     }
 
@@ -75,9 +121,15 @@ def analyze_resume(text):
 # LINKEDIN FUNCTIONS
 # ============================================
 
-def open_linkedin_jobs(skills, location=""):
+def open_linkedin_jobs(resume_data, location=""):
+    """Open LinkedIn job search based on resume skills"""
+    skills = resume_data.get("skills", [])
+    job_title = resume_data.get("job_title", "")
+    
     if skills:
         search_query = " ".join(skills[:3])
+    elif job_title and job_title != "Not detected":
+        search_query = job_title
     else:
         search_query = "software engineer"
     
@@ -95,58 +147,85 @@ def open_linkedin_jobs(skills, location=""):
 # JOB DATABASE
 # ============================================
 
-def get_jobs(search_query=""):
-    jobs = [
+def get_demo_jobs(search_query=""):
+    demo_jobs = [
         {"title": "Senior Python Developer", "company": "TechCorp", "location": "Remote", 
-         "salary": 120000, "description": "python django flask postgresql aws docker"},
-        {"title": "Full Stack JavaScript Developer", "company": "StartupXYZ", "location": "San Francisco",
-         "salary": 95000, "description": "react node.js mongodb typescript javascript html css"},
-        {"title": "Data Scientist", "company": "DataDriven", "location": "New York",
-         "salary": 130000, "description": "python tensorflow sql pandas numpy machine learning"},
-        {"title": "DevOps Engineer", "company": "CloudFirst", "location": "Austin",
-         "salary": 110000, "description": "aws docker kubernetes terraform jenkins ci/cd linux"},
+         "salary": 120000, "description": "Python Django Flask PostgreSQL AWS Docker Kubernetes",
+         "url": "https://linkedin.com"},
+        {"title": "Full Stack JavaScript Developer", "company": "StartupXYZ", "location": "San Francisco, CA",
+         "salary": 95000, "description": "React Node.js MongoDB TypeScript JavaScript",
+         "url": "https://linkedin.com"},
+        {"title": "Data Scientist", "company": "DataDriven Co", "location": "New York, NY",
+         "salary": 130000, "description": "Python TensorFlow SQL machine learning pandas",
+         "url": "https://linkedin.com"},
+        {"title": "DevOps Engineer", "company": "CloudFirst", "location": "Austin, TX",
+         "salary": 110000, "description": "AWS Docker Kubernetes Terraform Jenkins",
+         "url": "https://linkedin.com"},
         {"title": "Frontend Developer", "company": "WebAgency", "location": "Remote",
-         "salary": 85000, "description": "react typescript css html javascript vue angular"},
-        {"title": "Machine Learning Engineer", "company": "AI Labs", "location": "Seattle",
-         "salary": 145000, "description": "pytorch tensorflow deep learning nlp computer vision python"},
-        {"title": "Backend Developer", "company": "ServerSide", "location": "Chicago",
-         "salary": 100000, "description": "java spring boot mysql postgresql microservices"},
-        {"title": "Product Manager", "company": "ProductFirst", "location": "Boston",
-         "salary": 115000, "description": "agile scrum product management roadmap"},
+         "salary": 85000, "description": "React TypeScript CSS HTML JavaScript",
+         "url": "https://linkedin.com"},
+        {"title": "Machine Learning Engineer", "company": "AI Labs", "location": "Seattle, WA",
+         "salary": 145000, "description": "PyTorch TensorFlow deep learning NLP",
+         "url": "https://linkedin.com"},
+        {"title": "Backend Developer", "company": "ServerSide", "location": "Chicago, IL",
+         "salary": 100000, "description": "Java Spring Boot MySQL microservices",
+         "url": "https://linkedin.com"},
+        {"title": "Product Manager", "company": "ProductFirst", "location": "Boston, MA",
+         "salary": 115000, "description": "Agile Scrum product management roadmap",
+         "url": "https://linkedin.com"},
     ]
     
     if search_query:
         query_lower = search_query.lower()
-        filtered = [j for j in jobs if query_lower in j["title"].lower() or query_lower in j["description"].lower()]
-        return filtered if filtered else jobs
-    return jobs
+        filtered = [j for j in demo_jobs if query_lower in j["title"].lower() or query_lower in j["description"].lower()]
+        return filtered if filtered else demo_jobs
+    return demo_jobs
 
 # ============================================
 # MATCHING FUNCTIONS
 # ============================================
 
 def calculate_match_score(resume_skills, job_description):
+    if not job_description:
+        return 0, [], []
+    
     job_desc_lower = job_description.lower()
-    matched = []
-    missing = []
+    matched_skills = []
+    missing_skills = []
     
     for skill in resume_skills:
         if skill.lower() in job_desc_lower:
-            matched.append(skill)
+            matched_skills.append(skill)
         else:
-            missing.append(skill)
+            missing_skills.append(skill)
     
     if not resume_skills:
         return 0, [], []
     
-    match_rate = len(matched) / len(resume_skills) * 100
-    return round(match_rate, 1), matched, missing
+    match_rate = len(matched_skills) / len(resume_skills) * 100
+    return round(match_rate, 1), matched_skills, missing_skills
 
-def match_jobs(resume_skills, jobs):
+def match_jobs_with_resume(resume_data, jobs):
+    resume_skills = resume_data.get("skills", [])
     results = []
+    
     for job in jobs:
-        score, matched, missing = calculate_match_score(resume_skills, job.get("description", ""))
-        results.append({**job, "match_score": score, "matched": matched, "missing": missing[:5]})
+        match_score, matched, missing = calculate_match_score(resume_skills, job.get("description", ""))
+        
+        title_lower = job.get("title", "").lower()
+        for skill in resume_skills:
+            if skill.lower() in title_lower:
+                match_score += 5
+        
+        match_score = min(100, match_score)
+        
+        results.append({
+            **job,
+            "match_score": match_score,
+            "matched_skills": matched,
+            "missing_skills": missing[:5]
+        })
+    
     results.sort(key=lambda x: x["match_score"], reverse=True)
     return results
 
@@ -155,76 +234,146 @@ def match_jobs(resume_skills, jobs):
 # ============================================
 
 def main():
-    st.set_page_config(page_title="Job Finder", page_icon="🔍")
+    st.set_page_config(page_title="Resume Scanner & Job Finder", page_icon="🔍", layout="wide")
     
-    st.title("🔍 Resume Scanner & Job Finder")
-    st.markdown("Paste your resume to find matching jobs!")
-    st.write("---")
+    st.title("🔍 Resume Scanner & LinkedIn Job Finder")
+    st.markdown("Upload your resume to find matching jobs and open LinkedIn search!")
+    st.divider()
     
     # Sidebar
     with st.sidebar:
-        st.header("Settings")
+        st.header("⚙️ Settings")
+        job_search = st.text_input("Job Title to Search", "software engineer")
         location = st.text_input("Location", "Remote")
-        num_jobs = st.slider("Number of Jobs", 3, 10, 5)
+        num_jobs = st.slider("Number of Jobs", 5, 20, 10)
+        
+        st.markdown("---")
+        st.markdown("**📝 How it works:**")
+        st.markdown("1. Upload your PDF resume")
+        st.markdown("2. We extract your skills")
+        st.markdown("3. Find matching jobs")
+        st.markdown("4. Open LinkedIn search")
     
-    # Resume input
-    st.subheader("📄 Paste Your Resume")
-    resume_text = st.text_area("Copy and paste your resume text here:", height=200)
+    # File upload
+    uploaded_file = st.file_uploader("Upload your Resume (PDF)", type=["pdf"])
     
-    if resume_text:
-        with st.spinner("Analyzing..."):
-            resume_data = analyze_resume(resume_text)
+    if uploaded_file is not None:
+        with st.spinner("Analyzing your resume..."):
+            # Extract text from PDF
+            text = extract_text_from_pdf(uploaded_file)
             
-            st.success("✅ Resume analyzed!")
-            
-            # Stats
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Skills Found", len(resume_data["skills"]))
-            col2.metric("Experience", f"{resume_data['experience_years']} years")
-            col3.metric("Email", "Found" if resume_data["email"] else "Not found")
-            
-            # Skills
-            st.subheader("🛠️ Your Skills")
-            if resume_data["skills"]:
-                st.write(", ".join([f"`{s}`" for s in resume_data["skills"]]))
-            else:
-                st.warning("No skills detected!")
-            
-            # LinkedIn button
-            st.write("---")
-            if st.button("🔗 Open LinkedIn Jobs", type="primary"):
-                url, query = open_linkedin_jobs(resume_data["skills"], location)
-                st.success(f"Opened LinkedIn for: {query}")
-            
-            # Job matches
-            st.write("---")
-            st.subheader("🎯 Job Matches")
-            
-            jobs = get_jobs()
-            matched_jobs = match_jobs(resume_data["skills"], jobs)[:num_jobs]
-            
-            for i, job in enumerate(matched_jobs, 1):
-                score = job["match_score"]
-                if score >= 70:
-                    color = "green"
-                elif score >= 40:
-                    color = "orange"
+            if text and text.strip():
+                # Analyze resume
+                resume_data = analyze_resume(text)
+                
+                st.success("✅ Resume uploaded successfully!")
+                
+                # Stats row
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Skills Found", len(resume_data["skills"]))
+                with col2:
+                    st.metric("Experience", f"{resume_data['experience_years']} years")
+                with col3:
+                    st.metric("Job Title", resume_data["job_title"])
+                with col4:
+                    st.metric("Email", "Found ✅" if resume_data["email"] else "Not found")
+                
+                # Show detected skills
+                st.subheader("🛠️ Detected Skills from Resume")
+                if resume_data["skills"]:
+                    skills_html = " ".join([f"`{s}`" for s in resume_data["skills"]])
+                    st.markdown(skills_html)
                 else:
-                    color = "red"
+                    st.warning("No technical skills detected! Make sure your resume lists your skills clearly.")
                 
-                st.markdown(f"**{i}. {job['title']}**")
-                st.caption(f"🏢 {job['company']} | 📍 {job['location']} | 💰 ${job['salary']:,}")
-                st.markdown(f":{color}[**{score}% Match**]")
+                # LinkedIn Button
+                st.divider()
+                st.subheader("🔗 LinkedIn Job Search")
                 
-                if job["matched"]:
-                    st.caption(f"✅ Matched: {', '.join(job['matched'])}")
-                if job["missing"]:
-                    st.caption(f"💡 Missing: {', '.join(job['missing'])}")
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    if st.button("🚀 Open LinkedIn Jobs", type="primary", use_container_width=True):
+                        url, query = open_linkedin_jobs(resume_data, location)
+                        st.success(f"Opened LinkedIn search for: {query}")
                 
-                st.write("---")
+                with col_btn2:
+                    st.info(f"📍 Location: {location}")
+                    st.info(f"🔎 Search: {resume_data['skills'][:3] if resume_data['skills'] else job_search}")
+                
+                st.divider()
+                
+                # Job Matches
+                st.subheader(f"🎯 Top {num_jobs} Job Matches")
+                
+                jobs = get_demo_jobs(job_search)
+                matched_jobs = match_jobs_with_resume(resume_data, jobs)[:num_jobs]
+                
+                for i, job in enumerate(matched_jobs, 1):
+                    # Color based on match score
+                    if job["match_score"] >= 70:
+                        score_color = "green"
+                        emoji = "🟢"
+                    elif job["match_score"] >= 40:
+                        score_color = "orange"
+                        emoji = "🟡"
+                    else:
+                        score_color = "red"
+                        emoji = "🔴"
+                    
+                    with st.container():
+                        col_job1, col_job2, col_job3 = st.columns([1, 4, 1])
+                        
+                        with col_job1:
+                            st.markdown(f"### {i}")
+                        
+                        with col_job2:
+                            st.markdown(f"**{job['title']}**")
+                            st.caption(f"🏢 {job['company']} | 📍 {job['location']}")
+                            if job["salary"]:
+                                st.caption(f"💰 ${job['salary']:,}")
+                            if job["matched_skills"]:
+                                st.caption(f"✅ Matched: {', '.join(job['matched_skills'])}")
+                        
+                        with col_job3:
+                            st.markdown(f":{score_color}[**{job['match_score']}%**]")
+                            st.link_button("Apply", job["url"], type="secondary")
+                        
+                        st.divider()
+                
+                # Skills breakdown
+                if matched_jobs:
+                    st.subheader("📊 Skills Breakdown")
+                    with st.expander("See detailed skills analysis"):
+                        for job in matched_jobs[:3]:
+                            st.write(f"**{job['title']}**")
+                            if job["matched_skills"]:
+                                st.success(f"✅ You have: {', '.join(job['matched_skills'])}")
+                            if job["missing_skills"]:
+                                st.warning(f"💡 Learn: {', '.join(job['missing_skills'])}")
+                            st.markdown("---")
+            
+            else:
+                st.error("❌ Could not read PDF. Please try a different file.")
     
     else:
-        st.info("👆 Paste your resume above to get started!")
+        # Welcome screen
+        st.info("👆 Please upload a PDF resume to get started!")
+        
+        st.subheader("📋 How to use:")
+        col_h1, col_h2, col_h3 = st.columns(3)
+        
+        with col_h1:
+            st.markdown("### 1. Upload")
+            st.markdown("Upload your PDF resume")
+        
+        with col_h2:
+            st.markdown("### 2. Analyze")
+            st.markdown("We extract skills & experience")
+        
+        with col_h3:
+            st.markdown("### 3. Find Jobs")
+            st.markdown("Get matched & apply!")
 
 if __name__ == "__main__":
     main()
